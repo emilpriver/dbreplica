@@ -14,7 +14,7 @@ A Go package for managing database connections with a single write primary and m
 ## Installation
 
 ```bash
-go get github.com/yourusername/dbreplica
+go get github.com/emilpriver/dbreplica
 ```
 
 ## Usage
@@ -26,7 +26,7 @@ package main
 
 import (
     "log"
-    "github.com/yourusername/dbreplica"
+    "github.com/emilpriver/dbreplica"
     _ "github.com/lib/pq" // Import your database driver
 )
 
