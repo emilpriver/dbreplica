@@ -10,14 +10,14 @@ import (
 	"time"
 )
 
-// Variable to allow mocking sql.Open for testing
+// Add a variable to override sql.Open for mocking
 var sqlOpen = sql.Open
 
 // ReplicaManager manages multiple database connections including a primary write connection
 // and multiple read replica connections with round-robin load balancing
 type ReplicaManager struct {
-	writeDB       *sql.DB
-	readDBs       []*sql.DB
+	WriteDB       *sql.DB
+	ReadDBs       []*sql.DB
 	currentReadDB uint32 // atomic counter for round-robin selection
 	mu            sync.RWMutex
 	healthCheck   *HealthChecker
@@ -88,8 +88,8 @@ func NewReplicaManager(writeConnStr string, readConnStrs []string, driverName st
 	}
 
 	rm := &ReplicaManager{
-		writeDB:       writeDB,
-		readDBs:       readDBs,
+		WriteDB:       writeDB,
+		ReadDBs:       readDBs,
 		currentReadDB: 0,
 	}
 
@@ -113,14 +113,14 @@ func (rm *ReplicaManager) Close() error {
 	var errs []error
 
 	// Close write connection
-	if rm.writeDB != nil {
-		if err := rm.writeDB.Close(); err != nil {
+	if rm.WriteDB != nil {
+		if err := rm.WriteDB.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
 
 	// Close read connections
-	for _, db := range rm.readDBs {
+	for _, db := range rm.ReadDBs {
 		if err := db.Close(); err != nil {
 			errs = append(errs, err)
 		}
@@ -137,7 +137,7 @@ func (rm *ReplicaManager) Close() error {
 func (rm *ReplicaManager) GetWriteDB() *sql.DB {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
-	return rm.writeDB
+	return rm.WriteDB
 }
 
 // GetReadDB returns a read database connection using round-robin selection
@@ -145,55 +145,55 @@ func (rm *ReplicaManager) GetReadDB() *sql.DB {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
-	if len(rm.readDBs) == 0 {
+	if len(rm.ReadDBs) == 0 {
 		// Fallback to write DB if no read replicas are available
-		return rm.writeDB
+		return rm.WriteDB
 	}
 
 	// Get the next read DB using atomic round-robin
-	idx := atomic.AddUint32(&rm.currentReadDB, 1) % uint32(len(rm.readDBs))
-	return rm.readDBs[int(idx)]
+	idx := atomic.AddUint32(&rm.currentReadDB, 1) % uint32(len(rm.ReadDBs))
+	return rm.ReadDBs[int(idx)]
 }
 
 // Exec executes a query without returning any rows
 // It automatically uses the write database for modifications
 func (rm *ReplicaManager) Exec(query string, args ...interface{}) (sql.Result, error) {
-	db := rm.determineDBForQuery(query)
+	db := rm.DetermineDBForQuery(query)
 	return db.Exec(query, args...)
 }
 
 // ExecContext executes a query without returning any rows with a context
 // It automatically uses the write database for modifications
 func (rm *ReplicaManager) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
-	db := rm.determineDBForQuery(query)
+	db := rm.DetermineDBForQuery(query)
 	return db.ExecContext(ctx, query, args...)
 }
 
 // Query executes a query that returns rows
 // It uses read replicas for SELECT statements and write database for others
 func (rm *ReplicaManager) Query(query string, args ...interface{}) (*sql.Rows, error) {
-	db := rm.determineDBForQuery(query)
+	db := rm.DetermineDBForQuery(query)
 	return db.Query(query, args...)
 }
 
 // QueryContext executes a query that returns rows with a context
 // It uses read replicas for SELECT statements and write database for others
 func (rm *ReplicaManager) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
-	db := rm.determineDBForQuery(query)
+	db := rm.DetermineDBForQuery(query)
 	return db.QueryContext(ctx, query, args...)
 }
 
 // QueryRow executes a query that is expected to return at most one row
 // It uses read replicas for SELECT statements and write database for others
 func (rm *ReplicaManager) QueryRow(query string, args ...interface{}) *sql.Row {
-	db := rm.determineDBForQuery(query)
+	db := rm.DetermineDBForQuery(query)
 	return db.QueryRow(query, args...)
 }
 
 // QueryRowContext executes a query that is expected to return at most one row with a context
 // It uses read replicas for SELECT statements and write database for others
 func (rm *ReplicaManager) QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
-	db := rm.determineDBForQuery(query)
+	db := rm.DetermineDBForQuery(query)
 	return db.QueryRowContext(ctx, query, args...)
 }
 
@@ -214,14 +214,14 @@ func (rm *ReplicaManager) Prepare(query string) (*PreparedStatement, error) {
 	defer rm.mu.RUnlock()
 
 	// Prepare on write database
-	writeStmt, err := rm.writeDB.Prepare(query)
+	writeStmt, err := rm.WriteDB.Prepare(query)
 	if err != nil {
 		return nil, err
 	}
 
 	// Prepare on all read databases
-	readStmts := make([]*sql.Stmt, len(rm.readDBs))
-	for i, db := range rm.readDBs {
+	readStmts := make([]*sql.Stmt, len(rm.ReadDBs))
+	for i, db := range rm.ReadDBs {
 		stmt, err := db.Prepare(query)
 		if err != nil {
 			// Close all previously prepared statements
@@ -248,14 +248,14 @@ func (rm *ReplicaManager) PrepareContext(ctx context.Context, query string) (*Pr
 	defer rm.mu.RUnlock()
 
 	// Prepare on write database
-	writeStmt, err := rm.writeDB.PrepareContext(ctx, query)
+	writeStmt, err := rm.WriteDB.PrepareContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
 
 	// Prepare on all read databases
-	readStmts := make([]*sql.Stmt, len(rm.readDBs))
-	for i, db := range rm.readDBs {
+	readStmts := make([]*sql.Stmt, len(rm.ReadDBs))
+	for i, db := range rm.ReadDBs {
 		stmt, err := db.PrepareContext(ctx, query)
 		if err != nil {
 			// Close all previously prepared statements
@@ -276,9 +276,9 @@ func (rm *ReplicaManager) PrepareContext(ctx context.Context, query string) (*Pr
 	}, nil
 }
 
-// determineDBForQuery decides whether to use read or write database
+// DetermineDBForQuery decides whether to use read or write database
 // based on the type of SQL statement
-func (rm *ReplicaManager) determineDBForQuery(query string) *sql.DB {
+func (rm *ReplicaManager) DetermineDBForQuery(query string) *sql.DB {
 	// Trim whitespace and get the first word to determine query type
 	trimmedQuery := strings.TrimSpace(query)
 	firstWord := strings.ToUpper(strings.Fields(trimmedQuery)[0])
@@ -342,7 +342,7 @@ func (stmt *PreparedStatement) Exec(args ...interface{}) (sql.Result, error) {
 	defer stmt.mu.RUnlock()
 
 	// Use write statement for modifications
-	if stmt.rm.determineDBForQuery(stmt.query) == stmt.rm.GetWriteDB() {
+	if stmt.rm.DetermineDBForQuery(stmt.query) == stmt.rm.GetWriteDB() {
 		return stmt.writeStmt.Exec(args...)
 	}
 
@@ -357,7 +357,7 @@ func (stmt *PreparedStatement) ExecContext(ctx context.Context, args ...interfac
 	defer stmt.mu.RUnlock()
 
 	// Use write statement for modifications
-	if stmt.rm.determineDBForQuery(stmt.query) == stmt.rm.GetWriteDB() {
+	if stmt.rm.DetermineDBForQuery(stmt.query) == stmt.rm.GetWriteDB() {
 		return stmt.writeStmt.ExecContext(ctx, args...)
 	}
 
@@ -372,7 +372,7 @@ func (stmt *PreparedStatement) Query(args ...interface{}) (*sql.Rows, error) {
 	defer stmt.mu.RUnlock()
 
 	// Use write statement for modifications
-	if stmt.rm.determineDBForQuery(stmt.query) == stmt.rm.GetWriteDB() {
+	if stmt.rm.DetermineDBForQuery(stmt.query) == stmt.rm.GetWriteDB() {
 		return stmt.writeStmt.Query(args...)
 	}
 
@@ -387,7 +387,7 @@ func (stmt *PreparedStatement) QueryContext(ctx context.Context, args ...interfa
 	defer stmt.mu.RUnlock()
 
 	// Use write statement for modifications
-	if stmt.rm.determineDBForQuery(stmt.query) == stmt.rm.GetWriteDB() {
+	if stmt.rm.DetermineDBForQuery(stmt.query) == stmt.rm.GetWriteDB() {
 		return stmt.writeStmt.QueryContext(ctx, args...)
 	}
 
@@ -402,7 +402,7 @@ func (stmt *PreparedStatement) QueryRow(args ...interface{}) *sql.Row {
 	defer stmt.mu.RUnlock()
 
 	// Use write statement for modifications
-	if stmt.rm.determineDBForQuery(stmt.query) == stmt.rm.GetWriteDB() {
+	if stmt.rm.DetermineDBForQuery(stmt.query) == stmt.rm.GetWriteDB() {
 		return stmt.writeStmt.QueryRow(args...)
 	}
 
@@ -417,7 +417,7 @@ func (stmt *PreparedStatement) QueryRowContext(ctx context.Context, args ...inte
 	defer stmt.mu.RUnlock()
 
 	// Use write statement for modifications
-	if stmt.rm.determineDBForQuery(stmt.query) == stmt.rm.GetWriteDB() {
+	if stmt.rm.DetermineDBForQuery(stmt.query) == stmt.rm.GetWriteDB() {
 		return stmt.writeStmt.QueryRowContext(ctx, args...)
 	}
 

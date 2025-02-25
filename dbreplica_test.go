@@ -3,10 +3,12 @@ package dbreplica_test
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/emilpriver/dbreplica"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,7 +46,7 @@ func TestNewReplicaManager(t *testing.T) {
 		}
 
 		// Create the replica manager
-		rm, err := NewReplicaManager("write", []string{"read1", "read2"}, "mock", Config{
+		rm, err := dbreplica.NewReplicaManager("write", []string{"read1", "read2"}, "mock", dbreplica.Config{
 			HealthCheckInterval: 1 * time.Hour, // Set long interval for test
 			ConnectTimeout:      5 * time.Second,
 		})
@@ -61,13 +63,13 @@ func TestNewReplicaManager(t *testing.T) {
 	})
 
 	t.Run("should return error with empty write connection", func(t *testing.T) {
-		rm, err := NewReplicaManager("", []string{"read1", "read2"}, "mock", DefaultConfig())
+		rm, err := dbreplica.NewReplicaManager("", []string{"read1", "read2"}, "mock", dbreplica.DefaultConfig())
 		assert.Error(t, err)
 		assert.Nil(t, rm)
 	})
 
 	t.Run("should return error with empty read connections", func(t *testing.T) {
-		rm, err := NewReplicaManager("write", []string{}, "mock", DefaultConfig())
+		rm, err := dbreplica.NewReplicaManager("write", []string{}, "mock", dbreplica.DefaultConfig())
 		assert.Error(t, err)
 		assert.Nil(t, rm)
 	})
@@ -81,9 +83,9 @@ func TestDetermineDBForQuery(t *testing.T) {
 	readDB1, _, err := sqlmock.New()
 	require.NoError(t, err)
 
-	rm := &ReplicaManager{
-		writeDB: writeDB,
-		readDBs: []*sql.DB{readDB1},
+	rm := &dbreplica.ReplicaManager{
+		WriteDB: writeDB,
+		ReadDBs: []*sql.DB{readDB1},
 	}
 
 	// Test cases
@@ -109,7 +111,7 @@ func TestDetermineDBForQuery(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			db := rm.determineDBForQuery(tc.query)
+			db := rm.DetermineDBForQuery(tc.query)
 			assert.Equal(t, tc.expected, db)
 		})
 	}
@@ -129,9 +131,9 @@ func TestRoundRobinSelection(t *testing.T) {
 	readDB3, _, err := sqlmock.New()
 	require.NoError(t, err)
 
-	rm := &ReplicaManager{
-		writeDB: writeDB,
-		readDBs: []*sql.DB{readDB1, readDB2, readDB3},
+	rm := &dbreplica.ReplicaManager{
+		WriteDB: writeDB,
+		ReadDBs: []*sql.DB{readDB1, readDB2, readDB3},
 	}
 
 	// First call should return the first read DB
@@ -155,9 +157,9 @@ func TestExecAndQuery(t *testing.T) {
 	readDB, readMock, err := sqlmock.New()
 	require.NoError(t, err)
 
-	rm := &ReplicaManager{
-		writeDB: writeDB,
-		readDBs: []*sql.DB{readDB},
+	rm := &dbreplica.ReplicaManager{
+		WriteDB: writeDB,
+		ReadDBs: []*sql.DB{readDB},
 	}
 
 	t.Run("Exec should use write DB for updates", func(t *testing.T) {
@@ -165,7 +167,7 @@ func TestExecAndQuery(t *testing.T) {
 		args := []interface{}{"test"}
 
 		// Set expectation on write DB
-		writeMock.ExpectExec(query).WithArgs(args...).WillReturnResult(sqlmock.NewResult(0, 1))
+		writeMock.ExpectExec(query).WithArgs([]driver.Value{"test"}).WillReturnResult(sqlmock.NewResult(0, 1))
 
 		// Call Exec
 		result, err := rm.Exec(query, args...)
@@ -221,9 +223,9 @@ func TestPreparedStatements(t *testing.T) {
 	readDB, readMock, err := sqlmock.New()
 	require.NoError(t, err)
 
-	rm := &ReplicaManager{
-		writeDB: writeDB,
-		readDBs: []*sql.DB{readDB},
+	rm := &dbreplica.ReplicaManager{
+		WriteDB: writeDB,
+		ReadDBs: []*sql.DB{readDB},
 	}
 
 	t.Run("Prepare and execute SELECT", func(t *testing.T) {
@@ -235,7 +237,7 @@ func TestPreparedStatements(t *testing.T) {
 		readMock.ExpectPrepare(query)
 
 		// Set expectation for query execution
-		readMock.ExpectQuery(query).WithArgs(args...).WillReturnRows(
+		readMock.ExpectQuery(query).WithArgs([]driver.Value{1}).WillReturnRows(
 			sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "user1"))
 
 		// Prepare statement
@@ -276,7 +278,7 @@ func TestPreparedStatements(t *testing.T) {
 		readMock.ExpectPrepare(query)
 
 		// Set expectation for exec
-		writeMock.ExpectExec(query).WithArgs(args...).WillReturnResult(
+		writeMock.ExpectExec(query).WithArgs([]driver.Value{"newname", 1}).WillReturnResult(
 			sqlmock.NewResult(0, 1))
 
 		// Prepare statement
@@ -311,9 +313,9 @@ func TestTransactions(t *testing.T) {
 	readDB, _, err := sqlmock.New()
 	require.NoError(t, err)
 
-	rm := &ReplicaManager{
-		writeDB: writeDB,
-		readDBs: []*sql.DB{readDB},
+	rm := &dbreplica.ReplicaManager{
+		WriteDB: writeDB,
+		ReadDBs: []*sql.DB{readDB},
 	}
 
 	t.Run("Begin and commit transaction", func(t *testing.T) {
@@ -373,9 +375,9 @@ func TestContextFunctions(t *testing.T) {
 	readDB, readMock, err := sqlmock.New()
 	require.NoError(t, err)
 
-	rm := &ReplicaManager{
-		writeDB: writeDB,
-		readDBs: []*sql.DB{readDB},
+	rm := &dbreplica.ReplicaManager{
+		WriteDB: writeDB,
+		ReadDBs: []*sql.DB{readDB},
 	}
 
 	ctx := context.Background()
@@ -433,9 +435,9 @@ func TestHealthChecker(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create replica manager
-	rm := &ReplicaManager{
-		writeDB: writeDB,
-		readDBs: []*sql.DB{readDB1, readDB2},
+	rm := &dbreplica.ReplicaManager{
+		WriteDB: writeDB,
+		ReadDBs: []*sql.DB{readDB1, readDB2},
 	}
 
 	// Set up expectations for health check
@@ -444,7 +446,7 @@ func TestHealthChecker(t *testing.T) {
 	readMock2.ExpectPing()
 
 	// Create health checker with very short interval for testing
-	hc := NewHealthChecker(rm, 50*time.Millisecond)
+	hc := dbreplica.NewHealthChecker(rm, 50*time.Millisecond)
 
 	// Start health checker
 	hc.Start()

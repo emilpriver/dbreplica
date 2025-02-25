@@ -91,7 +91,7 @@ func (hc *HealthChecker) checkHealth() {
 	// Check read DBs in parallel
 	var wg sync.WaitGroup
 	hc.rm.mu.RLock()
-	for i, db := range hc.rm.readDBs {
+	for i, db := range hc.rm.ReadDBs {
 		wg.Add(1)
 		go func(db *sql.DB, index int) {
 			defer wg.Done()
